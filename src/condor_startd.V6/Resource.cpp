@@ -2901,12 +2901,12 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 
 			// The new resource needs the claim from its
 			// parititionable parent
-		delete new_rip->r_cur;
+        delete new_rip->r_cur;
 		new_rip->r_cur = rip->r_cur;
 		new_rip->r_cur->setResource( new_rip );
 
 			// And the partitionable parent needs a new claim
-		rip->r_cur = new Claim( rip );
+        rip->r_cur = new Claim( rip );
 
 			// Recompute the partitionable slot's resources
 		rip->change_state( unclaimed_state );

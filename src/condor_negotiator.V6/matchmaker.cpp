@@ -3612,18 +3612,30 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 
 		// 2g.  Delete ad from list so that it will not be considered again in 
 		//		this negotiation cycle
-		int reevaluate_ad = false;
-		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
-		if( reevaluate_ad ) {
-			reeval(offer);
-			// Shuffle this resource to the end of the list.  This way, if
-			// two resources with the same RANK match, we'll hand them out
-			// in a round-robin way
-			startdAds.Remove (offer);
-			startdAds.Insert (offer);
-		} else  {
-			startdAds.Remove (offer);
-		}	
+
+        if (false) {
+    		int reevaluate_ad = false;
+    		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
+    		if( reevaluate_ad ) {
+    			reeval(offer);
+        		// Shuffle this resource to the end of the list.  This way, if
+        		// two resources with the same RANK match, we'll hand them out
+        		// in a round-robin way
+        		startdAds.Remove (offer);
+        		startdAds.Insert (offer);
+    		} else  {
+    			startdAds.Remove (offer);
+    		}	
+        } else {
+            int w=0;
+            offer->EvalInteger(ATTR_CPUS, NULL, w);
+            w -= 1;
+            if (w < 0) w = 0;
+            offer->Assign(ATTR_CPUS, w);
+            if (w <= 0) {
+        		startdAds.Remove (offer);
+            }
+        }
 
 		double SlotWeight = accountant.GetSlotWeight(offer);
 		limitUsed += SlotWeight;
