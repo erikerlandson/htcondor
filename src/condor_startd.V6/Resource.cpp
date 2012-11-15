@@ -92,6 +92,9 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	r_cod_mgr = new CODMgr( this );
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
+    if (get_feature() == PARTITIONABLE_SLOT) {
+        while (r_claimset.size() < 10) r_claimset.insert(new Claim(this));
+    }
 
 	if( Name ) {
 		tmpName = Name;

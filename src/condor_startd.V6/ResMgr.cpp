@@ -944,6 +944,11 @@ ResMgr::get_by_any_id( char* id )
 			resources[i]->r_pre_pre->idMatches(id) ) {
 			return resources[i];
 		}
+        if (resources[i]->get_feature() == Resource::PARTITIONABLE_SLOT) {
+            for (std::set<Claim*>::iterator j(resources[i]->r_claimset.begin());  j != resources[i]->r_claimset.end();  ++j) {
+                if ((*j)->idMatches(id)) return resources[i];
+            }
+        }
 	}
 	return NULL;
 }
