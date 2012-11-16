@@ -3637,7 +3637,8 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
             }
         }
 
-		double SlotWeight = accountant.GetSlotWeight(offer);
+            //double SlotWeight = accountant.GetSlotWeight(offer);
+        double SlotWeight = 1;
 		limitUsed += SlotWeight;
         if (remoteUser == "") limitUsedUnclaimed += SlotWeight;
 		pieLeft -= SlotWeight;
@@ -4324,13 +4325,40 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 	}
 
 	// find the startd's claim id from the private ad
-	MyString claim_id_buf;
+    MyString claim_id_buf;
 	if ( want_claiming ) {
-		if (!(claim_id = getClaimId (startdName.Value(), startdAddr.Value(), claimIds, claim_id_buf)))
-		{
-			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
-			return MM_BAD_MATCH;
-		}
+        bool part = false;
+        if (!offer->LookupBool(ATTR_SLOT_PARTITIONABLE, part)) part = false;
+        if (!part) {
+    		if (!(claim_id = getClaimId (startdName.Value(), startdAddr.Value(), claimIds, claim_id_buf)))
+    		{
+    			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
+    			return MM_BAD_MATCH;
+    		}
+        } else {
+            string claims;
+            offer->LookupString("ClaimQue", claims);
+            dprintf(D_ALWAYS, "EJE: ClaimQue = \"%s\"\n", claims.c_str());
+            StringList l(claims.c_str());
+            l.rewind();
+            while (char* id = l.next()) {
+                dprintf(D_ALWAYS, "EJE: id= \"%s\"\n", id);
+            }
+            l.rewind();
+            char* idc = l.next();
+            if (!idc) {
+    			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
+    			return MM_BAD_MATCH;                
+            }
+            claim_id_buf = idc;
+            claim_id = claim_id_buf.Value();
+            claims = "";
+            while (char* id = l.next()) {
+                claims += " ";
+                claims += id;
+            }
+            offer->Assign("ClaimQue", claims);
+        }
 	} else {
 		// Claiming is *not* desired
 		claim_id = "null";

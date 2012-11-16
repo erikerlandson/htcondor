@@ -93,7 +93,7 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
     if (get_feature() == PARTITIONABLE_SLOT) {
-        while (r_claimset.size() < 10) r_claimset.insert(new Claim(this));
+        while (r_claims.size() < 10) r_claims.push_back(new Claim(this));
     }
 
 	if( Name ) {
@@ -1953,6 +1953,14 @@ Resource::publish( ClassAd* cap, amask_t mask )
 	if( r_pre ) {
 		r_pre->publishPreemptingClaim( cap, mask );
 	}
+    if (get_feature() == Resource::PARTITIONABLE_SLOT) {
+        string claims;
+        for (std::deque<Claim*>::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
+            if (j != r_claims.begin()) claims += " ";
+            claims += (*j)->id();
+        }
+        cap->Assign("ClaimQue", claims);
+    }
 
 		// Put in availability statistics
 	r_avail_stats.publish( cap, mask );
@@ -2902,15 +2910,24 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 		new_rip->refresh_classad( A_EVALUATED ); 
 		new_rip->refresh_classad( A_SHARED_SLOT ); 
 
-			// The new resource needs the claim from its
-			// parititionable parent
-        delete new_rip->r_cur;
-		new_rip->r_cur = rip->r_cur;
-		new_rip->r_cur->setResource( new_rip );
 
+        if (rip->get_feature() == Resource::PARTITIONABLE_SLOT) {
+            delete new_rip->r_cur;
+            new_rip->r_cur = rip->r_claims.front();
+            rip->r_claims.pop_front();
+            new_rip->r_cur->setResource( new_rip );
+
+            while (rip->r_claims.size() < 10) rip->r_claims.push_back(new Claim(rip));
+        } else {
+            // The new resource needs the claim from its
+            // parititionable parent
+            delete new_rip->r_cur;
+            new_rip->r_cur = rip->r_cur;
+            new_rip->r_cur->setResource( new_rip );
 			// And the partitionable parent needs a new claim
-        rip->r_cur = new Claim( rip );
-
+            rip->r_cur = new Claim(rip);
+        }
+        
 			// Recompute the partitionable slot's resources
 		rip->change_state( unclaimed_state );
 			// Call update() in case we were never matched, i.e. no state change

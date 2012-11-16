@@ -30,7 +30,7 @@
 #include "cod_mgr.h"
 #include "IdDispenser.h"
 
-#include <set>
+#include <deque>
 
 class Resource : public Service
 {
@@ -244,7 +244,7 @@ public:
 	Claim*			r_cur;		// Info about the current claim
 	Claim*			r_pre;		// Info about the possibly preempting claim
 	Claim*			r_pre_pre;	// Info about the preempting preempting claim
-    std::set<Claim*> r_claimset;
+    std::deque<Claim*> r_claims;
 	CODMgr*			r_cod_mgr;	// Object to manage COD claims
 	Reqexp*			r_reqexp;   // Object for the requirements expression
 	CpuAttributes*	r_attr;		// Attributes of this resource

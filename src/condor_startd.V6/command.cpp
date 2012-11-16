@@ -324,7 +324,7 @@ command_request_claim( Service*, int cmd, Stream* stream )
 		claim = rip->r_cur;
 	}
 	ASSERT( claim );
-	if( !claim->idMatches(id) ) {
+	if( !claim->idMatches(id) && (rip->r_claims.size() <= 0)) {
 			// This request doesn't match the right claim ID.  It must
 			// match one of the other claim IDs associated with this
 			// resource (e.g. because the negotiator matched the job
@@ -1244,7 +1244,7 @@ request_claim( Resource* rip, Claim *claim, char* id, Stream* stream )
 		}
 	} else {
 			// We're not claimed
-		if( rip->r_cur->idMatches(id) ) {
+		if( rip->r_cur->idMatches(id) || rip->r_claims.size() > 0) {
 			rip->dprintf( D_ALWAYS, "Request accepted.\n" );
 			cmd = OK;
 		} else {
@@ -1385,7 +1385,7 @@ accept_request_claim( Resource* rip, Claim* leftover_claim )
 		// Normally, we want to get this information from the schedd when the claim request
 		// first arrives.  This prevents a deadlock in the claiming protocol between the
 		// schedd and startd when the startd is running on an SMP.  -Todd 1/2000
-	if ( rip->r_cur->getaliveint() == -1 ) {
+	if ( rip->r_cur->getaliveint() == -1 && (rip->r_claims.size() <= 0)) {
 		stream->decode();
 		if( ! stream->code(client_addr) ) {
 			rip->dprintf( D_ALWAYS, "Can't receive schedd addr.\n" );
@@ -1790,8 +1790,19 @@ match_info( Resource* rip, char* id )
 	case backfill_state:
 #endif /* HAVE_BACKFILL */
 	case unclaimed_state:
-	case owner_state:
-		if( rip->r_cur->idMatches(id) ) {
+	case owner_state: {
+        Claim* cp = NULL;
+        if (rip->get_feature() == Resource::PARTITIONABLE_SLOT) {
+            for (std::deque<Claim*>::iterator j(rip->r_claims.begin());  j != rip->r_claims.end();  ++j) {
+                if ((*j)->idMatches(id)) {
+                    cp = *j;
+                    break;
+                }
+            }
+        } else if (rip->r_cur->idMatches(id)) {
+            cp = rip->r_cur;
+        }
+        if (cp) {
 			rip->dprintf( D_ALWAYS, "Received match %s\n", idp.publicClaimId() );
 
 			if( rip->destination_state() != no_state ) {
@@ -1807,7 +1818,7 @@ match_info( Resource* rip, char* id )
 
 				// Start a timer to prevent staying in matched state
 				// too long. 
-			rip->r_cur->start_match_timer();
+			cp->start_match_timer();
 
 			rip->dprintf( D_FAILURE|D_ALWAYS, "State change: "
 						  "match notification protocol successful\n" );
@@ -1831,7 +1842,7 @@ match_info( Resource* rip, char* id )
 						  "Invalid ClaimId from negotiator (%s)\n", id );
 			rval = FALSE;
 		}
-		break;
+    } break;
 	default:
 		EXCEPT( "match_info() called with unexpected state (%s)", 
 				state_to_string(rip->state()) );
