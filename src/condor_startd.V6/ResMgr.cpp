@@ -921,7 +921,7 @@ ResMgr::get_by_cur_id( char* id )
 			return resources[i];
 		}
         if (resources[i]->get_feature() == Resource::PARTITIONABLE_SLOT) {
-            for (std::deque<Claim*>::iterator j(resources[i]->r_claims.begin());  j != resources[i]->r_claims.end();  ++j) {
+            for (Resource::claims_t::iterator j(resources[i]->r_claims.begin());  j != resources[i]->r_claims.end();  ++j) {
                 if ((*j)->idMatches(id)) {
                     resources[i]->r_cur = *j;
                     return resources[i];
@@ -953,7 +953,7 @@ ResMgr::get_by_any_id( char* id )
 			return resources[i];
 		}
         if (resources[i]->get_feature() == Resource::PARTITIONABLE_SLOT) {
-            for (std::deque<Claim*>::iterator j(resources[i]->r_claims.begin());  j != resources[i]->r_claims.end();  ++j) {
+            for (Resource::claims_t::iterator j(resources[i]->r_claims.begin());  j != resources[i]->r_claims.end();  ++j) {
                 if ((*j)->idMatches(id)) {
                     resources[i]->r_cur = *j;
                     return resources[i];

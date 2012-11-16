@@ -93,7 +93,7 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
     if (get_feature() == PARTITIONABLE_SLOT) {
-        while (r_claims.size() < 10) r_claims.push_back(new Claim(this));
+        while (r_claims.size() < 10) r_claims.insert(new Claim(this));
     }
 
 	if( Name ) {
@@ -1955,8 +1955,8 @@ Resource::publish( ClassAd* cap, amask_t mask )
 	}
     if (get_feature() == Resource::PARTITIONABLE_SLOT) {
         string claims;
-        for (std::deque<Claim*>::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
-            if (j != r_claims.begin()) claims += " ";
+        for (claims_t::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
+            claims += " ";
             claims += (*j)->id();
         }
         cap->Assign("ClaimQue", claims);
@@ -2911,22 +2911,15 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 		new_rip->refresh_classad( A_SHARED_SLOT ); 
 
 
-        if (rip->get_feature() == Resource::PARTITIONABLE_SLOT) {
-            delete new_rip->r_cur;
-            new_rip->r_cur = rip->r_claims.front();
-            rip->r_claims.pop_front();
-            new_rip->r_cur->setResource( new_rip );
+        // The new resource needs the claim from its parititionable parent
+        delete new_rip->r_cur;
+        new_rip->r_cur = rip->r_cur;
+        new_rip->r_cur->setResource(new_rip);
+        rip->r_claims.erase(rip->r_cur);
 
-            while (rip->r_claims.size() < 10) rip->r_claims.push_back(new Claim(rip));
-        } else {
-            // The new resource needs the claim from its
-            // parititionable parent
-            delete new_rip->r_cur;
-            new_rip->r_cur = rip->r_cur;
-            new_rip->r_cur->setResource( new_rip );
-			// And the partitionable parent needs a new claim
-            rip->r_cur = new Claim(rip);
-        }
+		// And the partitionable parent needs a new claim
+        rip->r_cur = new Claim(rip);
+        rip->r_claims.insert(rip->r_cur);
         
 			// Recompute the partitionable slot's resources
 		rip->change_state( unclaimed_state );

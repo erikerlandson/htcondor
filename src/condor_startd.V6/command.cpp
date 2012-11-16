@@ -134,6 +134,7 @@ command_activate_claim( Service*, int cmd, Stream* stream )
 		return FALSE;
 	}
 	free( id );
+    dprintf(D_ALWAYS, "EJE: command_activate_claim(), slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 
 	if ( resmgr->isShuttingDown() ) {
 		rip->log_shutdown_ignore( cmd );
@@ -180,6 +181,7 @@ command_activate_claim( Service*, int cmd, Stream* stream )
 	}
 
 		// If we got to here, everything's cool.  Do the work. 
+    dprintf(D_ALWAYS, "EJE: about to invoke activate_claim(), slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 	return activate_claim( rip, stream );
 }
 
@@ -324,7 +326,7 @@ command_request_claim( Service*, int cmd, Stream* stream )
 		claim = rip->r_cur;
 	}
 	ASSERT( claim );
-	if( !claim->idMatches(id) && (rip->r_claims.size() <= 0)) {
+	if( !claim->idMatches(id) ) {
 			// This request doesn't match the right claim ID.  It must
 			// match one of the other claim IDs associated with this
 			// resource (e.g. because the negotiator matched the job
@@ -1244,7 +1246,7 @@ request_claim( Resource* rip, Claim *claim, char* id, Stream* stream )
 		}
 	} else {
 			// We're not claimed
-		if( rip->r_cur->idMatches(id) || rip->r_claims.size() > 0) {
+		if( rip->r_cur->idMatches(id) ) {
 			rip->dprintf( D_ALWAYS, "Request accepted.\n" );
 			cmd = OK;
 		} else {
@@ -1385,7 +1387,7 @@ accept_request_claim( Resource* rip, Claim* leftover_claim )
 		// Normally, we want to get this information from the schedd when the claim request
 		// first arrives.  This prevents a deadlock in the claiming protocol between the
 		// schedd and startd when the startd is running on an SMP.  -Todd 1/2000
-	if ( rip->r_cur->getaliveint() == -1 && (rip->r_claims.size() <= 0)) {
+	if ( rip->r_cur->getaliveint() == -1 ) {
 		stream->decode();
 		if( ! stream->code(client_addr) ) {
 			rip->dprintf( D_ALWAYS, "Can't receive schedd addr.\n" );
@@ -1488,6 +1490,8 @@ activate_claim( Resource* rip, Stream* stream )
 	Sock* sock = (Sock*)stream;
 	char* shadow_addr = strdup(sock->peer_addr().to_ip_string().Value());
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() A: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
+
 	if( rip->state() != claimed_state ) {
 		rip->dprintf( D_ALWAYS, "Not in claimed state, aborting.\n" );
 		refuse( stream );
@@ -1498,6 +1502,7 @@ activate_claim( Resource* rip, Stream* stream )
 			 "Got activate_claim request from shadow (%s)\n", 
 			 shadow_addr );
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() B: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 		// Find out what version of the starter to use for the activation.
 	if( ! stream->code( starter ) ) {
 		rip->dprintf( D_ALWAYS, "Can't read starter type from %s\n",
@@ -1511,6 +1516,7 @@ activate_claim( Resource* rip, Stream* stream )
 	    ABORT;
 	}
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() C: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 		// Grab request class ad 
 	req_classad = new ClassAd;
 	if( !req_classad->initFromStream(*stream) ) {
@@ -1596,6 +1602,7 @@ activate_claim( Resource* rip, Stream* stream )
 	    ABORT;
 	}
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() D: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 		// If we're here, we've decided to activate the claim.  Tell
 		// the shadow we're ok.
 	stream->encode();
@@ -1695,6 +1702,7 @@ activate_claim( Resource* rip, Stream* stream )
 	}
 #endif	// of ifdef WIN32
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() E: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 		// now that we've gotten this far, we're really going to try
 		// to spawn the starter.  set it in our Claim object.  Once
 		// it's there, we no longer control this memory so we should
@@ -1733,6 +1741,7 @@ activate_claim( Resource* rip, Stream* stream )
 		resmgr->walk( &Resource::update);
 	}
 
+    dprintf(D_ALWAYS, "EJE: activate_claim() F: slot= %s  id= %s\n", rip->r_name, rip->r_cur->id()); 
 		// Finally, update all these things into the resource classad.
 	rip->r_cur->publish( rip->r_classad, A_PUBLIC );
 
@@ -1790,19 +1799,8 @@ match_info( Resource* rip, char* id )
 	case backfill_state:
 #endif /* HAVE_BACKFILL */
 	case unclaimed_state:
-	case owner_state: {
-        Claim* cp = NULL;
-        if (rip->get_feature() == Resource::PARTITIONABLE_SLOT) {
-            for (std::deque<Claim*>::iterator j(rip->r_claims.begin());  j != rip->r_claims.end();  ++j) {
-                if ((*j)->idMatches(id)) {
-                    cp = *j;
-                    break;
-                }
-            }
-        } else if (rip->r_cur->idMatches(id)) {
-            cp = rip->r_cur;
-        }
-        if (cp) {
+	case owner_state:
+        if (rip->r_cur->idMatches(id)) {
 			rip->dprintf( D_ALWAYS, "Received match %s\n", idp.publicClaimId() );
 
 			if( rip->destination_state() != no_state ) {
@@ -1818,7 +1816,7 @@ match_info( Resource* rip, char* id )
 
 				// Start a timer to prevent staying in matched state
 				// too long. 
-			cp->start_match_timer();
+			rip->r_cur->start_match_timer();
 
 			rip->dprintf( D_FAILURE|D_ALWAYS, "State change: "
 						  "match notification protocol successful\n" );
@@ -1842,7 +1840,7 @@ match_info( Resource* rip, char* id )
 						  "Invalid ClaimId from negotiator (%s)\n", id );
 			rval = FALSE;
 		}
-    } break;
+        break;
 	default:
 		EXCEPT( "match_info() called with unexpected state (%s)", 
 				state_to_string(rip->state()) );

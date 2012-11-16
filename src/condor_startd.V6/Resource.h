@@ -31,6 +31,7 @@
 #include "IdDispenser.h"
 
 #include <deque>
+#include <set>
 
 class Resource : public Service
 {
@@ -244,7 +245,13 @@ public:
 	Claim*			r_cur;		// Info about the current claim
 	Claim*			r_pre;		// Info about the possibly preempting claim
 	Claim*			r_pre_pre;	// Info about the preempting preempting claim
-    std::deque<Claim*> r_claims;
+    struct claimset_less {
+        bool operator()(Claim* a, Claim* b) const {
+            return strcmp(a->id(), b->id()) < 0;
+        }
+    };
+    typedef std::set<Claim*, claimset_less> claims_t;
+    claims_t        r_claims;
 	CODMgr*			r_cod_mgr;	// Object to manage COD claims
 	Reqexp*			r_reqexp;   // Object for the requirements expression
 	CpuAttributes*	r_attr;		// Attributes of this resource
