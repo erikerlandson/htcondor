@@ -107,7 +107,8 @@ class Matchmaker : public Service
 		// reinitialization method (reconfig)
 		int reinitialize ();	
 
-		typedef HashTable<MyString, MyString> ClaimIdHash;
+            //typedef HashTable<MyString, MyString> ClaimIdHash;
+        typedef std::map<std::string, std::set<std::string> > ClaimIdHash;
 
 		// command handlers
 		int RESCHEDULE_commandHandler (int, Stream*);

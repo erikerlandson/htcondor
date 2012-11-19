@@ -1144,7 +1144,8 @@ negotiationTime ()
 {
 	ClassAdList allAds; //contains ads from collector
 	ClassAdListDoesNotDeleteAds startdAds; // ptrs to startd ads in allAds
-	ClaimIdHash claimIds(MyStringHash);
+        //ClaimIdHash claimIds(MyStringHash);
+    ClaimIdHash claimIds;
 	ClassAdListDoesNotDeleteAds scheddAds; // ptrs to schedd ads in allAds
 
 	/**
@@ -3092,8 +3093,8 @@ obtainAdsFromCollector (
 
 	MakeClaimIdHash(startdPvtAdList,claimIds);
 
-	dprintf(D_ALWAYS, "Got ads: %d public and %d private\n",
-	        allAds.MyLength(),claimIds.getNumElements());
+	dprintf(D_ALWAYS, "Got ads: %d public and %lu private\n",
+	        allAds.MyLength(),claimIds.size());
 
 	dprintf(D_ALWAYS, "Public ads include %d submitter, %d startd\n",
 		scheddAds.MyLength(), startdAds.MyLength() );
@@ -3145,7 +3146,8 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
 	while( (ad = startdPvtAdList.Next()) ) {
 		MyString name;
 		MyString ip_addr;
-		MyString claim_id;
+		string claim_id;
+        string claimlist;
 
 		if( !ad->LookupString(ATTR_NAME, name) ) {
 			continue;
@@ -3157,18 +3159,33 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
 			// As of 7.1.3, we look up CLAIM_ID first and CAPABILITY
 			// second.  Someday CAPABILITY can be phased out.
 		if( !ad->LookupString(ATTR_CLAIM_ID, claim_id) &&
-			!ad->LookupString(ATTR_CAPABILITY, claim_id) )
+			!ad->LookupString(ATTR_CAPABILITY, claim_id) &&
+            !ad->LookupString("ClaimIdList", claimlist))
 		{
 			continue;
 		}
 
 			// hash key is name + ip_addr
-		name += ip_addr;
-		if( claimIds.insert(name,claim_id)!=0 ) {
-			dprintf(D_ALWAYS,
-					"WARNING: failed to insert claim id hash table entry "
-					"for '%s'\n",name.Value());
-		}
+        string key = name;
+        key += ip_addr;
+        ClaimIdHash::iterator f(claimIds.find(key));
+        if (f == claimIds.end()) {
+            claimIds[key];
+            f = claimIds.find(key);
+        } else {
+            dprintf(D_ALWAYS, "Warning: duplicate key %s detected while loading private claim table, overwriting previous entry\n", key.c_str());
+            f->second.clear();
+        }
+
+        if (ad->LookupString("ClaimIdList", claimlist)) {
+            StringList idlist(claimlist.c_str());
+            idlist.rewind();
+            while (char* id = idlist.next()) {
+                f->second.insert(id);
+            }
+        } else {
+            f->second.insert(claim_id);
+        }
 	}
 	startdPvtAdList.Close();
 }
@@ -4284,7 +4301,6 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 	char accountingGroup[256];
 	char remoteOwner[256];
     MyString startdName;
-	char const *claim_id;
 	SafeSock startdSock;
 	bool send_failed;
 	int want_claiming = -1;
@@ -4324,41 +4340,23 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 		}
 	}
 
-	// find the startd's claim id from the private ad
-    MyString claim_id_buf;
-	if ( want_claiming ) {
-        bool part = false;
-        if (!offer->LookupBool(ATTR_SLOT_PARTITIONABLE, part)) part = false;
-        if (!part) {
-    		if (!(claim_id = getClaimId (startdName.Value(), startdAddr.Value(), claimIds, claim_id_buf)))
-    		{
-    			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
-    			return MM_BAD_MATCH;
-    		}
-        } else {
-            string claims;
-            offer->LookupString("ClaimQue", claims);
-            dprintf(D_ALWAYS, "EJE: ClaimQue = \"%s\"\n", claims.c_str());
-            StringList l(claims.c_str());
-            l.rewind();
-            while (char* id = l.next()) {
-                dprintf(D_ALWAYS, "EJE: id= \"%s\"\n", id);
-            }
-            l.rewind();
-            char* idc = l.next();
-            if (!idc) {
-    			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
-    			return MM_BAD_MATCH;                
-            }
-            claim_id_buf = idc;
-            claim_id = claim_id_buf.Value();
-            claims = "";
-            while (char* id = l.next()) {
-                claims += " ";
-                claims += id;
-            }
-            offer->Assign("ClaimQue", claims);
+	// find the startd's claim id from the private a
+	char const *claim_id = NULL;
+    string claim_id_buf;
+    ClaimIdHash::iterator claimset = claimIds.end();
+	if (want_claiming) {
+        string key = startdName.Value();
+        key += startdAddr.Value();
+        claimset = claimIds.find(key);
+        if ((claimIds.end() == claimset) || (claimset->second.size() < 1)) {
+            dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
+            return MM_BAD_MATCH;
         }
+        for (set<string>::iterator j(claimset->second.begin());  j != claimset->second.end();  ++j) {
+            dprintf(D_ALWAYS, "EJE: id= \"%s\"\n", j->c_str());
+        }
+        claim_id_buf = *(claimset->second.begin());
+        claim_id = claim_id_buf.c_str();
 	} else {
 		// Claiming is *not* desired
 		claim_id = "null";
@@ -4464,6 +4462,13 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 			cluster, proc, scheddName, scheddAddr, remoteUser.c_str(),
 			startdAddr.Value(), startdName.Value(),
 			offline ? " (offline)" : "");
+
+    // At this point we're offering this match as good.
+    // We don't offer a claim more than once per cycle, so remove it
+    // from the set of available claims.
+    if (claimset != claimIds.end()) {
+        claimset->second.erase(claim_id_buf);
+    }
 
 	/* CONDORDB Insert into matches table */
 	insert_into_matches(scheddName, request, *offer);
@@ -4633,17 +4638,6 @@ calculateNormalizationFactor (ClassAdListDoesNotDeleteAds &scheddAds,
 	scheddAds.Close();
 }
 
-
-char const *
-Matchmaker::getClaimId (const char *startdName, const char *startdAddr, ClaimIdHash &claimIds, MyString &claim_id_buf)
-{
-	MyString key = startdName;
-	key += startdAddr;
-	if( claimIds.lookup(key,claim_id_buf)!=0 ) {
-		return NULL;
-	}
-	return claim_id_buf.Value();
-}
 
 void Matchmaker::
 addRemoteUserPrios( ClassAdListDoesNotDeleteAds &cal )

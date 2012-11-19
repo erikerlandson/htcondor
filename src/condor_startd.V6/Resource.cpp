@@ -2023,6 +2023,15 @@ Resource::publish_private( ClassAd *ad )
 	} else if( r_cur ) {
 		ad->Assign( ATTR_CAPABILITY, r_cur->id() );
 	}		
+
+    if (get_feature() == Resource::PARTITIONABLE_SLOT) {
+        string claims;
+        for (claims_t::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
+            claims += " ";
+            claims += (*j)->id();
+        }
+        ad->Assign("ClaimIdList", claims);
+    }
 }
 
 void
