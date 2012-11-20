@@ -86,14 +86,26 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	prevLHF = 0;
 	r_classad = NULL;
 	r_state = new ResState( this );
-	r_cur = new Claim( this );
 	r_pre = NULL;
 	r_pre_pre = NULL;
 	r_cod_mgr = new CODMgr( this );
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
+
     if (get_feature() == PARTITIONABLE_SLOT) {
-        while (r_claims.size() < 10) r_claims.insert(new Claim(this));
+        string pname;
+        formatstr(pname, "SLOT_TYPE_%d_NUM_CLAIMS", type());
+        unsigned nclaims = param_integer(pname.c_str(), 0);
+        if (nclaims < 1) {
+            nclaims = param_integer("NUM_CLAIMS", 0);
+        }
+        if (nclaims < 1) {
+            nclaims = r_attr->num_cpus();
+        }
+        while (r_claims.size() < nclaims) r_claims.insert(new Claim(this));
+        r_cur = *(r_claims.begin());
+    } else {
+        r_cur = new Claim( this );
     }
 
 	if( Name ) {
@@ -1953,14 +1965,6 @@ Resource::publish( ClassAd* cap, amask_t mask )
 	if( r_pre ) {
 		r_pre->publishPreemptingClaim( cap, mask );
 	}
-    if (get_feature() == Resource::PARTITIONABLE_SLOT) {
-        string claims;
-        for (claims_t::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
-            claims += " ";
-            claims += (*j)->id();
-        }
-        cap->Assign("ClaimQue", claims);
-    }
 
 		// Put in availability statistics
 	r_avail_stats.publish( cap, mask );
