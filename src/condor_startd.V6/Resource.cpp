@@ -1867,6 +1867,7 @@ Resource::publish( ClassAd* cap, amask_t mask )
 		case PARTITIONABLE_SLOT:
 			cap->AssignExpr(ATTR_SLOT_PARTITIONABLE, "TRUE");
             cap->Assign(ATTR_SLOT_TYPE, "Partitionable");
+            cap->Assign(ATTR_NUM_CLAIMS, r_claims.size());
 			break;
 		case DYNAMIC_SLOT:
 			cap->AssignExpr(ATTR_SLOT_DYNAMIC, "TRUE");
@@ -2034,7 +2035,8 @@ Resource::publish_private( ClassAd *ad )
             claims += " ";
             claims += (*j)->id();
         }
-        ad->Assign("ClaimIdList", claims);
+        ad->Assign(ATTR_CLAIM_ID_LIST, claims);
+        ad->Assign(ATTR_NUM_CLAIMS, r_claims.size());
     }
 }
 

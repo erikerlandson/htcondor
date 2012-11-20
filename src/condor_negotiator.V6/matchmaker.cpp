@@ -3160,7 +3160,7 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
 			// second.  Someday CAPABILITY can be phased out.
 		if( !ad->LookupString(ATTR_CLAIM_ID, claim_id) &&
 			!ad->LookupString(ATTR_CAPABILITY, claim_id) &&
-            !ad->LookupString("ClaimIdList", claimlist))
+            !ad->LookupString(ATTR_CLAIM_ID_LIST, claimlist))
 		{
 			continue;
 		}
@@ -3177,7 +3177,7 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
             f->second.clear();
         }
 
-        if (ad->LookupString("ClaimIdList", claimlist)) {
+        if (ad->LookupString(ATTR_CLAIM_ID_LIST, claimlist)) {
             StringList idlist(claimlist.c_str());
             idlist.rewind();
             while (char* id = idlist.next()) {
