@@ -351,5 +351,4 @@ The job may be rejected, in which case the returned Resource will be null.
 */
 Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &leftover_claim);
 
-
 #endif /* _STARTD_RESOURCE_H */

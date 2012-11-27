@@ -2849,55 +2849,66 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 			// not exist, we either cons up a default or refuse the claim.
 		MyString schedd_requested_attr;
 
-			// Look to see how many CPUs are being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_CPUS;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, cpus ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_CPUS, mach_classad, cpus ) ) {
-				cpus = 1; // reasonable default, for sure
-			}
-		}
-		type.formatstr_cat( "cpus=%d ", cpus );
+        if (supports_consumption_policy(*mach_classad)) {
+            // apply consumption policy
+            std::map<string, double> consumption;
+            compute_asset_consumption(*req_classad, *mach_classad, consumption);
 
-			// Look to see how much MEMORY is being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_MEMORY;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, memory ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_MEMORY, mach_classad, memory ) ) {
-					// some memory size must be available else we cannot
-					// match, plus a job ad without ATTR_MEMORY is sketchy
-				rip->dprintf( D_ALWAYS,
-						  "No memory request in incoming ad, aborting...\n" );
-				return NULL;
-			}
-		}
-		type.formatstr_cat( "memory=%d ", memory );
+            // generate the type string used by standard code path
+            for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+                if (j != consumption.begin()) type += " ";
+                type.formatstr_cat("%s=%d", j->first.c_str(), int(j->second));
+            }
+        } else {
+                // Look to see how many CPUs are being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_CPUS;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, cpus ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_CPUS, mach_classad, cpus ) ) {
+                    cpus = 1; // reasonable default, for sure
+                }
+            }
+            type.formatstr_cat( "cpus=%d ", cpus );
+
+                // Look to see how much MEMORY is being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_MEMORY;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, memory ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_MEMORY, mach_classad, memory ) ) {
+                        // some memory size must be available else we cannot
+                        // match, plus a job ad without ATTR_MEMORY is sketchy
+                    rip->dprintf( D_ALWAYS,
+                                  "No memory request in incoming ad, aborting...\n" );
+                    return NULL;
+                }
+            }
+            type.formatstr_cat( "memory=%d ", memory );
+
+                // Look to see how much DISK is being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_DISK;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, disk ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_DISK, mach_classad, disk ) ) {
+                        // some disk size must be available else we cannot
+                        // match, plus a job ad without ATTR_DISK is sketchy
+                    rip->dprintf( D_FULLDEBUG,
+                                  "No disk request in incoming ad, aborting...\n" );
+                    return NULL;
+                }
+            }
+            type.formatstr_cat( "disk=%d%%",
+                                max((int) ceil((disk / (double) rip->r_attr->get_total_disk()) * 100), 1) );
 
 
-			// Look to see how much DISK is being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_DISK;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, disk ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_DISK, mach_classad, disk ) ) {
-					// some disk size must be available else we cannot
-					// match, plus a job ad without ATTR_DISK is sketchy
-				rip->dprintf( D_FULLDEBUG,
-						  "No disk request in incoming ad, aborting...\n" );
-				return NULL;
-			}
-		}
-		type.formatstr_cat( "disk=%d%%",
-			max((int) ceil((disk / (double) rip->r_attr->get_total_disk()) * 100), 1) );
-
-
-        for (CpuAttributes::slotres_map_t::const_iterator j(rip->r_attr->get_slotres_map().begin());  j != rip->r_attr->get_slotres_map().end();  ++j) {
-            string reqname;
-            formatstr(reqname, "%s%s", ATTR_REQUEST_PREFIX, j->first.c_str());
-            int reqval = 0;
-            if (!req_classad->EvalInteger(reqname.c_str(), mach_classad, reqval)) reqval = 0;
-            string attr;
-            formatstr(attr, " %s=%d", j->first.c_str(), reqval);
-            type += attr;
+            for (CpuAttributes::slotres_map_t::const_iterator j(rip->r_attr->get_slotres_map().begin());  j != rip->r_attr->get_slotres_map().end();  ++j) {
+                string reqname;
+                formatstr(reqname, "%s%s", ATTR_REQUEST_PREFIX, j->first.c_str());
+                int reqval = 0;
+                if (!req_classad->EvalInteger(reqname.c_str(), mach_classad, reqval)) reqval = 0;
+                string attr;
+                formatstr(attr, " %s=%d", j->first.c_str(), reqval);
+                type += attr;
+            }
         }
 
 		rip->dprintf( D_FULLDEBUG,
