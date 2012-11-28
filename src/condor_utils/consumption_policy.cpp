@@ -17,6 +17,12 @@
  *
  ***************************************************************/
 
+
+#include "condor_common.h"
+#include "MyString.h"
+#include "condor_attributes.h"
+#include "string_list.h"
+
 #include "consumption_policy.h"
 
 
@@ -37,7 +43,7 @@ bool supports_consumption_policy(ClassAd& resource) {
 }
 
 
-void compute_asset_consumption(ClassAd& job, ClassAd& resource, std::map<string, double>& consumption) {
+void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, double>& consumption) {
     consumption.clear();
 
     string mrv;
@@ -91,10 +97,10 @@ void compute_asset_consumption(ClassAd& job, ClassAd& resource, std::map<string,
 }
 
 
-bool consume_resource_assets(ClassAd& job, ClassAd& resource) {
-    std::map<string, double> consumption;
+bool consume_resource_assets(ClassAd& job, ClassAd& resource, bool test) {
+    map<string, double> consumption;
     compute_asset_consumption(job, resource, consumption);
-    for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+    for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
         const char* asset = j->first.c_str();
         dprintf(D_ALWAYS, "EJE: asset %s...\n", asset);
         double av=0;
@@ -108,8 +114,11 @@ bool consume_resource_assets(ClassAd& job, ClassAd& resource) {
         }
     }
 
+    // if we're in test mode, we skip actual consumption
+    if (test) return true;
+
     // we can satisfy the requested assets, so do the deed:
-    for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+    for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
         const char* asset = j->first.c_str();
         double av=0;
         resource.LookupFloat(asset, av);

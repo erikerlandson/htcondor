@@ -19,11 +19,14 @@
 #ifndef CONSUMPTION_POLICY_H
 #define CONSUMPTION_POLICY_H
 
-#include "compat_classad.h"
+#include "condor_classad.h"
 #include <map>
 
+using std::string;
+using std::map;
+
 bool supports_consumption_policy(ClassAd& resource);
-void compute_asset_consumption(ClassAd& job, ClassAd& resource, std::map<string, double>& consumption);
-bool consume_resource_assets(ClassAd& job, ClassAd& resource);
+void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, double>& consumption);
+bool consume_resource_assets(ClassAd& job, ClassAd& resource, bool test=false);
 
 #endif // CONSUMPTION_POLICY_H

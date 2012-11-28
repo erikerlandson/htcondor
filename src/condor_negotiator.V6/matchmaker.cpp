@@ -41,6 +41,8 @@
 #include "MyString.h"
 #include "condor_daemon_core.h"
 
+#include "consumption_policy.h"
+
 #include <vector>
 #include <string>
 #include <deque>
@@ -3589,6 +3591,28 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
                 remoteHost = NULL;
 			}
 
+            // When we support neg-side multi-consumption, we need to consider
+            // insufficient resource assets as a failure mode.
+            // Do this prior to matchmaking protocol, since we are making a prediction
+            // here whether an attempted claim will succeed on the basis of available assets.
+            // An open question: would folding this logic into matchmakingAlgorithm()
+            // be a preferable semantic, so asset testing becomes another match test?
+            // Putting it here makes it easier to rotate offers to the back, which at 
+            // least allows jobs with smaller reqs to take a shot at it later.
+            if (supports_consumption_policy(*offer)) {
+                // use test mode here, since other possible failure modes follow
+                if (!consume_resource_assets(request, *offer, true)) {
+                    dprintf(D_ALWAYS, "EJE: match failed due to insufficient resource assets\n");
+                    // future optimization: try to detect if no more matches are possible
+                    // (claim capacity measure becomes < 1?) and remove the ad for this cycle.
+                    // maybe provide a switch to always remove on 1st failure?
+                    startdAds.Remove(offer);
+                    startdAds.Insert(offer);
+                    result = MM_BAD_MATCH;
+                    continue;
+                }
+            }
+
 			// 2e(ii).  perform the matchmaking protocol
 			result = matchmakingProtocol (request, offer, claimIds, sock, 
 					scheddName, scheddAddr.Value());
@@ -3630,35 +3654,35 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 		// 2g.  Delete ad from list so that it will not be considered again in 
 		//		this negotiation cycle
 
-        if (false) {
+        double match_cost = 0;
+        if (supports_consumption_policy(*offer)) {
+            double w0 = accountant.GetSlotWeight(offer);
+            // we've vetted this match, so actually consume assets off the resource ad:
+            consume_resource_assets(request, *offer);
+            double w1 = accountant.GetSlotWeight(offer);
+            // prototype match cost is change in slot weight expr.  could be enhanced
+            // with a more formalized model like Claim Capcity model in the future.
+            match_cost = w0 - w1;
+        } else {
     		int reevaluate_ad = false;
     		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
-    		if( reevaluate_ad ) {
+    		if (reevaluate_ad) {
     			reeval(offer);
         		// Shuffle this resource to the end of the list.  This way, if
         		// two resources with the same RANK match, we'll hand them out
         		// in a round-robin way
-        		startdAds.Remove (offer);
-        		startdAds.Insert (offer);
+        		startdAds.Remove(offer);
+        		startdAds.Insert(offer);
     		} else  {
-    			startdAds.Remove (offer);
-    		}	
-        } else {
-            int w=0;
-            offer->EvalInteger(ATTR_CPUS, NULL, w);
-            w -= 1;
-            if (w < 0) w = 0;
-            offer->Assign(ATTR_CPUS, w);
-            if (w <= 0) {
-        		startdAds.Remove (offer);
-            }
+    			startdAds.Remove(offer);
+    		}
+            // traditional match cost is just slot weight expression
+            match_cost = accountant.GetSlotWeight(offer);
         }
 
-            //double SlotWeight = accountant.GetSlotWeight(offer);
-        double SlotWeight = 1;
-		limitUsed += SlotWeight;
-        if (remoteUser == "") limitUsedUnclaimed += SlotWeight;
-		pieLeft -= SlotWeight;
+		limitUsed += match_cost;
+        if (remoteUser == "") limitUsedUnclaimed += match_cost;
+		pieLeft -= match_cost;
 		negotiation_cycle_stats[0]->matches++;
 	}
 

@@ -30,6 +30,8 @@
 
 #include "slot_builder.h"
 
+#include "consumption_policy.h"
+
 #if defined(WANT_CONTRIB) && defined(WITH_MANAGEMENT)
 #if defined(HAVE_DLOPEN) || defined(WIN32)
 #include "StartdPlugin.h"
