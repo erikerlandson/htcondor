@@ -2858,8 +2858,14 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 
             // generate the type string used by standard code path
             for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+                dprintf(D_ALWAYS, "EJE: type(%s) = %g\n", j->first.c_str(), j->second);
                 if (j != consumption.begin()) type += " ";
-                type.formatstr_cat("%s=%d", j->first.c_str(), int(j->second));
+                if (j->first == "disk") {
+                    // if it weren't for special cases, we'd have no cases at all
+                    type.formatstr_cat("disk=%d%%", max(1, (int)ceil(100 * j->second / (double)rip->r_attr->get_total_disk())));
+                } else {
+                    type.formatstr_cat("%s=%d", j->first.c_str(), int(j->second));
+                }
             }
         } else {
                 // Look to see how many CPUs are being requested.

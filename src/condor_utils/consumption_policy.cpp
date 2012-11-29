@@ -33,10 +33,11 @@ bool supports_consumption_policy(ClassAd& resource) {
     StringList alist(mrv.c_str());
     alist.rewind();
     while (char* asset = alist.next()) {
+        if (0 == strcmp(asset, "swap")) continue;
         string ca;
         formatstr(ca, "%s%s", ATTR_CONSUMPTION_PREFIX, asset);
-        string v;
-        if (!resource.LookupString(ca.c_str(), v)) return false;
+        ClassAd::iterator f(resource.find(ca));
+        if (f == resource.end()) return false;
     }
 
     return true;
@@ -54,6 +55,7 @@ void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, doub
     StringList alist(mrv.c_str());
     alist.rewind();
     while (char* asset = alist.next()) {
+        if (0 == strcmp(asset, "swap")) continue;
         dprintf(D_ALWAYS, "EJE: asset %s...\n", asset);
 
         string rsave;

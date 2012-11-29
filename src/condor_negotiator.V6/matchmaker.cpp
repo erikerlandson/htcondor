@@ -3663,6 +3663,8 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
             // prototype match cost is change in slot weight expr.  could be enhanced
             // with a more formalized model like Claim Capcity model in the future.
             match_cost = w0 - w1;
+            // in this mode we don't remove offers here, because we attempt to reuse them.
+            // removal is performed above when testing for resource assets
         } else {
     		int reevaluate_ad = false;
     		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
