@@ -3739,6 +3739,11 @@ EvalNegotiatorMatchRank(char const *expr_name,ExprTree *expr,
 bool Matchmaker::
 SubmitterLimitPermits(ClassAd *candidate, double used, double allowed, double pieLeft) 
 {
+    // slots with a consumption policy have to disable this check to work properly
+    // alternatively, could compute accurate match cost with consume_resource_assets(),
+    // if/when I fold consumption policy into matchmakingAlgorithm().
+    if (supports_consumption_policy(*candidate)) return true;
+
     double SlotWeight = accountant.GetSlotWeight(candidate);
     if ((used + SlotWeight) <= allowed) {
         return true;
