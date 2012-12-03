@@ -27,9 +27,16 @@
 
 
 bool supports_consumption_policy(ClassAd& resource) {
+    // currently, only p-slots can support a meaningful consumption policy
+    bool part = false;
+    if (!resource.LookupBool(ATTR_SLOT_PARTITIONABLE, part)) part = false;
+    if (!part) return false;
+    
+    // must support MachineResources attribute
     string mrv;
     if (!resource.LookupString(ATTR_MACHINE_RESOURCES, mrv)) return false;
 
+    // must define ConsumptionXxx for all resources Xxx (including extensible resources)
     StringList alist(mrv.c_str());
     alist.rewind();
     while (char* asset = alist.next()) {
