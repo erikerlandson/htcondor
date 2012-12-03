@@ -3508,6 +3508,28 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 											 pieLeft,
 											 only_consider_startd_rank);
 
+            // When we support neg-side multi-consumption, we need to consider
+            // insufficient resource assets as a failure mode.
+            // Do this prior to matchmaking protocol, since we are making a prediction
+            // here whether an attempted claim will succeed on the basis of available assets.
+            // An open question: would folding this logic into matchmakingAlgorithm()
+            // be a preferable semantic, so asset testing becomes another match test?
+            // Would have to properly handle requirements clauses of form 
+            // (RequestFoo <= Foo), interacting with ConsumptionFoo
+            if ((offer != NULL) && supports_consumption_policy(*offer)) {
+                // use test mode here, since other possible failure modes follow
+                if (!consume_resource_assets(request, *offer, true)) {
+                    dprintf(D_ALWAYS, "EJE: match failed due to insufficient resource assets\n");
+                    // future optimization: try to detect if no more matches are possible
+                    // (claim capacity measure becomes < 1?) and remove the ad for this cycle.
+                    // maybe provide a switch to always remove on 1st failure?
+                    startdAds.Remove(offer);
+                    startdAds.Insert(offer);
+                    // this case acts like failure to find match in rest of code path:
+                    offer = NULL;
+                }
+            }
+
 			if( !offer )
 			{
 				int want_match_diagnostics = 0;
@@ -3590,28 +3612,6 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
                 free(remoteHost);
                 remoteHost = NULL;
 			}
-
-            // When we support neg-side multi-consumption, we need to consider
-            // insufficient resource assets as a failure mode.
-            // Do this prior to matchmaking protocol, since we are making a prediction
-            // here whether an attempted claim will succeed on the basis of available assets.
-            // An open question: would folding this logic into matchmakingAlgorithm()
-            // be a preferable semantic, so asset testing becomes another match test?
-            // Putting it here makes it easier to rotate offers to the back, which at 
-            // least allows jobs with smaller reqs to take a shot at it later.
-            if (supports_consumption_policy(*offer)) {
-                // use test mode here, since other possible failure modes follow
-                if (!consume_resource_assets(request, *offer, true)) {
-                    dprintf(D_ALWAYS, "EJE: match failed due to insufficient resource assets\n");
-                    // future optimization: try to detect if no more matches are possible
-                    // (claim capacity measure becomes < 1?) and remove the ad for this cycle.
-                    // maybe provide a switch to always remove on 1st failure?
-                    startdAds.Remove(offer);
-                    startdAds.Insert(offer);
-                    result = MM_BAD_MATCH;
-                    continue;
-                }
-            }
 
 			// 2e(ii).  perform the matchmaking protocol
 			result = matchmakingProtocol (request, offer, claimIds, sock, 
