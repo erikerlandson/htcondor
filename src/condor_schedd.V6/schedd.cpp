@@ -4922,6 +4922,8 @@ MainScheddNegotiate::scheduler_handleMatch(PROC_ID job_id,char const *claim_id,C
 		return false;
 	}
 
+    dprintf(D_ALWAYS, "EJE: adding match-rec for %s\n", claim_id);
+
 	match_rec *mrec = scheduler.AddMrec(
 		claim_id, startd.addr(), &job_id, &match_ad,
 		getOwner(), getRemotePool() );
@@ -5551,6 +5553,7 @@ Scheduler::contactStartd( ContactStartdArgs* args )
     jobAd->CopyAttribute(ATTR_REMOTE_AUTOREGROUP, mrec->my_match_ad);
 
 		// Setup to claim the slot asynchronously
+    dprintf(D_ALWAYS, "EJE: getting ready to claim for id %s\n", mrec->claimId());
 
 	jobAd->Assign( ATTR_STARTD_SENDS_ALIVES, mrec->m_startd_sends_alives );
 
@@ -5603,6 +5606,7 @@ Scheduler::claimedStartd( DCMsgCallback *cb ) {
 		return;
 	}
 	ASSERT( match );
+    dprintf(D_ALWAYS, "EJE: claimedStartd: claim= %s\n", match->claimId());
 
 		// Remove callback pointer from the match record, since the claim
 		// request operation is finished.

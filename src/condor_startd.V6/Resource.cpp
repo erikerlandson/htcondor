@@ -30,6 +30,8 @@
 
 #include "slot_builder.h"
 
+#include "consumption_policy.h"
+
 #if defined(WANT_CONTRIB) && defined(WITH_MANAGEMENT)
 #if defined(HAVE_DLOPEN) || defined(WIN32)
 #include "StartdPlugin.h"
@@ -86,12 +88,27 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	prevLHF = 0;
 	r_classad = NULL;
 	r_state = new ResState( this );
-	r_cur = new Claim( this );
 	r_pre = NULL;
 	r_pre_pre = NULL;
 	r_cod_mgr = new CODMgr( this );
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
+
+    if (get_feature() == PARTITIONABLE_SLOT) {
+        string pname;
+        formatstr(pname, "SLOT_TYPE_%d_NUM_CLAIMS", type());
+        unsigned nclaims = param_integer(pname.c_str(), 0);
+        if (nclaims < 1) {
+            nclaims = param_integer("NUM_CLAIMS", 0);
+        }
+        if (nclaims < 1) {
+            nclaims = r_attr->num_cpus();
+        }
+        while (r_claims.size() < nclaims) r_claims.insert(new Claim(this));
+        r_cur = *(r_claims.begin());
+    } else {
+        r_cur = new Claim( this );
+    }
 
 	if( Name ) {
 		tmpName = Name;
@@ -1852,6 +1869,7 @@ Resource::publish( ClassAd* cap, amask_t mask )
 		case PARTITIONABLE_SLOT:
 			cap->AssignExpr(ATTR_SLOT_PARTITIONABLE, "TRUE");
             cap->Assign(ATTR_SLOT_TYPE, "Partitionable");
+            cap->Assign(ATTR_NUM_CLAIMS, r_claims.size());
 			break;
 		case DYNAMIC_SLOT:
 			cap->AssignExpr(ATTR_SLOT_DYNAMIC, "TRUE");
@@ -2012,6 +2030,16 @@ Resource::publish_private( ClassAd *ad )
 	} else if( r_cur ) {
 		ad->Assign( ATTR_CAPABILITY, r_cur->id() );
 	}		
+
+    if (get_feature() == Resource::PARTITIONABLE_SLOT) {
+        string claims;
+        for (claims_t::iterator j(r_claims.begin());  j != r_claims.end();  ++j) {
+            claims += " ";
+            claims += (*j)->id();
+        }
+        ad->Assign(ATTR_CLAIM_ID_LIST, claims);
+        ad->Assign(ATTR_NUM_CLAIMS, r_claims.size());
+    }
 }
 
 void
@@ -2823,55 +2851,72 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 			// not exist, we either cons up a default or refuse the claim.
 		MyString schedd_requested_attr;
 
-			// Look to see how many CPUs are being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_CPUS;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, cpus ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_CPUS, mach_classad, cpus ) ) {
-				cpus = 1; // reasonable default, for sure
-			}
-		}
-		type.formatstr_cat( "cpus=%d ", cpus );
+        if (supports_consumption_policy(*mach_classad)) {
+            // apply consumption policy
+            std::map<string, double> consumption;
+            compute_asset_consumption(*req_classad, *mach_classad, consumption);
 
-			// Look to see how much MEMORY is being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_MEMORY;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, memory ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_MEMORY, mach_classad, memory ) ) {
-					// some memory size must be available else we cannot
-					// match, plus a job ad without ATTR_MEMORY is sketchy
-				rip->dprintf( D_ALWAYS,
-						  "No memory request in incoming ad, aborting...\n" );
-				return NULL;
-			}
-		}
-		type.formatstr_cat( "memory=%d ", memory );
+            // generate the type string used by standard code path
+            for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+                dprintf(D_ALWAYS, "EJE: type(%s) = %g\n", j->first.c_str(), j->second);
+                if (j != consumption.begin()) type += " ";
+                if (j->first == "disk") {
+                    // if it weren't for special cases, we'd have no cases at all
+                    type.formatstr_cat("disk=%d%%", max(1, (int)ceil(100 * j->second / (double)rip->r_attr->get_total_disk())));
+                } else {
+                    type.formatstr_cat("%s=%d", j->first.c_str(), int(j->second));
+                }
+            }
+        } else {
+                // Look to see how many CPUs are being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_CPUS;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, cpus ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_CPUS, mach_classad, cpus ) ) {
+                    cpus = 1; // reasonable default, for sure
+                }
+            }
+            type.formatstr_cat( "cpus=%d ", cpus );
+
+                // Look to see how much MEMORY is being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_MEMORY;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, memory ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_MEMORY, mach_classad, memory ) ) {
+                        // some memory size must be available else we cannot
+                        // match, plus a job ad without ATTR_MEMORY is sketchy
+                    rip->dprintf( D_ALWAYS,
+                                  "No memory request in incoming ad, aborting...\n" );
+                    return NULL;
+                }
+            }
+            type.formatstr_cat( "memory=%d ", memory );
+
+                // Look to see how much DISK is being requested.
+            schedd_requested_attr = "_condor_";
+            schedd_requested_attr += ATTR_REQUEST_DISK;
+            if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, disk ) ) {
+                if( !req_classad->EvalInteger( ATTR_REQUEST_DISK, mach_classad, disk ) ) {
+                        // some disk size must be available else we cannot
+                        // match, plus a job ad without ATTR_DISK is sketchy
+                    rip->dprintf( D_FULLDEBUG,
+                                  "No disk request in incoming ad, aborting...\n" );
+                    return NULL;
+                }
+            }
+            type.formatstr_cat( "disk=%d%%",
+                                max((int) ceil((disk / (double) rip->r_attr->get_total_disk()) * 100), 1) );
 
 
-			// Look to see how much DISK is being requested.
-		schedd_requested_attr = "_condor_";
-		schedd_requested_attr += ATTR_REQUEST_DISK;
-		if( !req_classad->EvalInteger( schedd_requested_attr.Value(), mach_classad, disk ) ) {
-			if( !req_classad->EvalInteger( ATTR_REQUEST_DISK, mach_classad, disk ) ) {
-					// some disk size must be available else we cannot
-					// match, plus a job ad without ATTR_DISK is sketchy
-				rip->dprintf( D_FULLDEBUG,
-						  "No disk request in incoming ad, aborting...\n" );
-				return NULL;
-			}
-		}
-		type.formatstr_cat( "disk=%d%%",
-			max((int) ceil((disk / (double) rip->r_attr->get_total_disk()) * 100), 1) );
-
-
-        for (CpuAttributes::slotres_map_t::const_iterator j(rip->r_attr->get_slotres_map().begin());  j != rip->r_attr->get_slotres_map().end();  ++j) {
-            string reqname;
-            formatstr(reqname, "%s%s", ATTR_REQUEST_PREFIX, j->first.c_str());
-            int reqval = 0;
-            if (!req_classad->EvalInteger(reqname.c_str(), mach_classad, reqval)) reqval = 0;
-            string attr;
-            formatstr(attr, " %s=%d", j->first.c_str(), reqval);
-            type += attr;
+            for (CpuAttributes::slotres_map_t::const_iterator j(rip->r_attr->get_slotres_map().begin());  j != rip->r_attr->get_slotres_map().end();  ++j) {
+                string reqname;
+                formatstr(reqname, "%s%s", ATTR_REQUEST_PREFIX, j->first.c_str());
+                int reqval = 0;
+                if (!req_classad->EvalInteger(reqname.c_str(), mach_classad, reqval)) reqval = 0;
+                string attr;
+                formatstr(attr, " %s=%d", j->first.c_str(), reqval);
+                type += attr;
+            }
         }
 
 		rip->dprintf( D_FULLDEBUG,
@@ -2899,15 +2944,17 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 		new_rip->refresh_classad( A_EVALUATED ); 
 		new_rip->refresh_classad( A_SHARED_SLOT ); 
 
-			// The new resource needs the claim from its
-			// parititionable parent
-		delete new_rip->r_cur;
-		new_rip->r_cur = rip->r_cur;
-		new_rip->r_cur->setResource( new_rip );
 
-			// And the partitionable parent needs a new claim
-		rip->r_cur = new Claim( rip );
+        // The new resource needs the claim from its parititionable parent
+        delete new_rip->r_cur;
+        new_rip->r_cur = rip->r_cur;
+        new_rip->r_cur->setResource(new_rip);
+        rip->r_claims.erase(rip->r_cur);
 
+		// And the partitionable parent needs a new claim
+        rip->r_cur = new Claim(rip);
+        rip->r_claims.insert(rip->r_cur);
+        
 			// Recompute the partitionable slot's resources
 		rip->change_state( unclaimed_state );
 			// Call update() in case we were never matched, i.e. no state change

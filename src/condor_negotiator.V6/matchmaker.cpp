@@ -41,6 +41,8 @@
 #include "MyString.h"
 #include "condor_daemon_core.h"
 
+#include "consumption_policy.h"
+
 #include <vector>
 #include <string>
 #include <deque>
@@ -1144,7 +1146,8 @@ negotiationTime ()
 {
 	ClassAdList allAds; //contains ads from collector
 	ClassAdListDoesNotDeleteAds startdAds; // ptrs to startd ads in allAds
-	ClaimIdHash claimIds(MyStringHash);
+        //ClaimIdHash claimIds(MyStringHash);
+    ClaimIdHash claimIds;
 	ClassAdListDoesNotDeleteAds scheddAds; // ptrs to schedd ads in allAds
 
 	/**
@@ -3092,8 +3095,8 @@ obtainAdsFromCollector (
 
 	MakeClaimIdHash(startdPvtAdList,claimIds);
 
-	dprintf(D_ALWAYS, "Got ads: %d public and %d private\n",
-	        allAds.MyLength(),claimIds.getNumElements());
+	dprintf(D_ALWAYS, "Got ads: %d public and %lu private\n",
+	        allAds.MyLength(),claimIds.size());
 
 	dprintf(D_ALWAYS, "Public ads include %d submitter, %d startd\n",
 		scheddAds.MyLength(), startdAds.MyLength() );
@@ -3145,7 +3148,8 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
 	while( (ad = startdPvtAdList.Next()) ) {
 		MyString name;
 		MyString ip_addr;
-		MyString claim_id;
+		string claim_id;
+        string claimlist;
 
 		if( !ad->LookupString(ATTR_NAME, name) ) {
 			continue;
@@ -3157,18 +3161,33 @@ Matchmaker::MakeClaimIdHash(ClassAdList &startdPvtAdList, ClaimIdHash &claimIds)
 			// As of 7.1.3, we look up CLAIM_ID first and CAPABILITY
 			// second.  Someday CAPABILITY can be phased out.
 		if( !ad->LookupString(ATTR_CLAIM_ID, claim_id) &&
-			!ad->LookupString(ATTR_CAPABILITY, claim_id) )
+			!ad->LookupString(ATTR_CAPABILITY, claim_id) &&
+            !ad->LookupString(ATTR_CLAIM_ID_LIST, claimlist))
 		{
 			continue;
 		}
 
 			// hash key is name + ip_addr
-		name += ip_addr;
-		if( claimIds.insert(name,claim_id)!=0 ) {
-			dprintf(D_ALWAYS,
-					"WARNING: failed to insert claim id hash table entry "
-					"for '%s'\n",name.Value());
-		}
+        string key = name;
+        key += ip_addr;
+        ClaimIdHash::iterator f(claimIds.find(key));
+        if (f == claimIds.end()) {
+            claimIds[key];
+            f = claimIds.find(key);
+        } else {
+            dprintf(D_ALWAYS, "Warning: duplicate key %s detected while loading private claim table, overwriting previous entry\n", key.c_str());
+            f->second.clear();
+        }
+
+        if (ad->LookupString(ATTR_CLAIM_ID_LIST, claimlist)) {
+            StringList idlist(claimlist.c_str());
+            idlist.rewind();
+            while (char* id = idlist.next()) {
+                f->second.insert(id);
+            }
+        } else {
+            f->second.insert(claim_id);
+        }
 	}
 	startdPvtAdList.Close();
 }
@@ -3489,6 +3508,28 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 											 pieLeft,
 											 only_consider_startd_rank);
 
+            // When we support neg-side multi-consumption, we need to consider
+            // insufficient resource assets as a failure mode.
+            // Do this prior to matchmaking protocol, since we are making a prediction
+            // here whether an attempted claim will succeed on the basis of available assets.
+            // An open question: would folding this logic into matchmakingAlgorithm()
+            // be a preferable semantic, so asset testing becomes another match test?
+            // Would have to properly handle requirements clauses of form 
+            // (RequestFoo <= Foo), interacting with ConsumptionFoo
+            if ((offer != NULL) && supports_consumption_policy(*offer)) {
+                // use test mode here, since other possible failure modes follow
+                if (!consume_resource_assets(request, *offer, true)) {
+                    dprintf(D_ALWAYS, "EJE: match failed due to insufficient resource assets\n");
+                    // future optimization: try to detect if no more matches are possible
+                    // (claim capacity measure becomes < 1?) and remove the ad for this cycle.
+                    // maybe provide a switch to always remove on 1st failure?
+                    startdAds.Remove(offer);
+                    startdAds.Insert(offer);
+                    // this case acts like failure to find match in rest of code path:
+                    offer = NULL;
+                }
+            }
+
 			if( !offer )
 			{
 				int want_match_diagnostics = 0;
@@ -3612,23 +3653,38 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 
 		// 2g.  Delete ad from list so that it will not be considered again in 
 		//		this negotiation cycle
-		int reevaluate_ad = false;
-		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
-		if( reevaluate_ad ) {
-			reeval(offer);
-			// Shuffle this resource to the end of the list.  This way, if
-			// two resources with the same RANK match, we'll hand them out
-			// in a round-robin way
-			startdAds.Remove (offer);
-			startdAds.Insert (offer);
-		} else  {
-			startdAds.Remove (offer);
-		}	
 
-		double SlotWeight = accountant.GetSlotWeight(offer);
-		limitUsed += SlotWeight;
-        if (remoteUser == "") limitUsedUnclaimed += SlotWeight;
-		pieLeft -= SlotWeight;
+        double match_cost = 0;
+        if (supports_consumption_policy(*offer)) {
+            double w0 = accountant.GetSlotWeight(offer);
+            // we've vetted this match, so actually consume assets off the resource ad:
+            consume_resource_assets(request, *offer);
+            double w1 = accountant.GetSlotWeight(offer);
+            // prototype match cost is change in slot weight expr.  could be enhanced
+            // with a more formalized model like Claim Capcity model in the future.
+            match_cost = w0 - w1;
+            // in this mode we don't remove offers here, because we attempt to reuse them.
+            // removal is performed above when testing for resource assets
+        } else {
+    		int reevaluate_ad = false;
+    		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
+    		if (reevaluate_ad) {
+    			reeval(offer);
+        		// Shuffle this resource to the end of the list.  This way, if
+        		// two resources with the same RANK match, we'll hand them out
+        		// in a round-robin way
+        		startdAds.Remove(offer);
+        		startdAds.Insert(offer);
+    		} else  {
+    			startdAds.Remove(offer);
+    		}
+            // traditional match cost is just slot weight expression
+            match_cost = accountant.GetSlotWeight(offer);
+        }
+
+		limitUsed += match_cost;
+        if (remoteUser == "") limitUsedUnclaimed += match_cost;
+		pieLeft -= match_cost;
 		negotiation_cycle_stats[0]->matches++;
 	}
 
@@ -3683,6 +3739,11 @@ EvalNegotiatorMatchRank(char const *expr_name,ExprTree *expr,
 bool Matchmaker::
 SubmitterLimitPermits(ClassAd *candidate, double used, double allowed, double pieLeft) 
 {
+    // slots with a consumption policy have to disable this check to work properly
+    // alternatively, could compute accurate match cost with consume_resource_assets(),
+    // if/when I fold consumption policy into matchmakingAlgorithm().
+    if (supports_consumption_policy(*candidate)) return true;
+
     double SlotWeight = accountant.GetSlotWeight(candidate);
     if ((used + SlotWeight) <= allowed) {
         return true;
@@ -4271,7 +4332,6 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 	char accountingGroup[256];
 	char remoteOwner[256];
     MyString startdName;
-	char const *claim_id;
 	SafeSock startdSock;
 	bool send_failed;
 	int want_claiming = -1;
@@ -4311,14 +4371,23 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 		}
 	}
 
-	// find the startd's claim id from the private ad
-	MyString claim_id_buf;
-	if ( want_claiming ) {
-		if (!(claim_id = getClaimId (startdName.Value(), startdAddr.Value(), claimIds, claim_id_buf)))
-		{
-			dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
-			return MM_BAD_MATCH;
-		}
+	// find the startd's claim id from the private a
+	char const *claim_id = NULL;
+    string claim_id_buf;
+    ClaimIdHash::iterator claimset = claimIds.end();
+	if (want_claiming) {
+        string key = startdName.Value();
+        key += startdAddr.Value();
+        claimset = claimIds.find(key);
+        if ((claimIds.end() == claimset) || (claimset->second.size() < 1)) {
+            dprintf(D_ALWAYS,"      %s has no claim id\n", startdName.Value());
+            return MM_BAD_MATCH;
+        }
+        for (set<string>::iterator j(claimset->second.begin());  j != claimset->second.end();  ++j) {
+            dprintf(D_ALWAYS, "EJE: id= \"%s\"\n", j->c_str());
+        }
+        claim_id_buf = *(claimset->second.begin());
+        claim_id = claim_id_buf.c_str();
 	} else {
 		// Claiming is *not* desired
 		claim_id = "null";
@@ -4424,6 +4493,13 @@ matchmakingProtocol (ClassAd &request, ClassAd *offer,
 			cluster, proc, scheddName, scheddAddr, remoteUser.c_str(),
 			startdAddr.Value(), startdName.Value(),
 			offline ? " (offline)" : "");
+
+    // At this point we're offering this match as good.
+    // We don't offer a claim more than once per cycle, so remove it
+    // from the set of available claims.
+    if (claimset != claimIds.end()) {
+        claimset->second.erase(claim_id_buf);
+    }
 
 	/* CONDORDB Insert into matches table */
 	insert_into_matches(scheddName, request, *offer);
@@ -4593,17 +4669,6 @@ calculateNormalizationFactor (ClassAdListDoesNotDeleteAds &scheddAds,
 	scheddAds.Close();
 }
 
-
-char const *
-Matchmaker::getClaimId (const char *startdName, const char *startdAddr, ClaimIdHash &claimIds, MyString &claim_id_buf)
-{
-	MyString key = startdName;
-	key += startdAddr;
-	if( claimIds.lookup(key,claim_id_buf)!=0 ) {
-		return NULL;
-	}
-	return claim_id_buf.Value();
-}
 
 void Matchmaker::
 addRemoteUserPrios( ClassAdListDoesNotDeleteAds &cal )
