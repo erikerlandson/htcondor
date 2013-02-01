@@ -2851,10 +2851,10 @@ Resource * initialize_resource(Resource * rip, ClassAd * req_classad, Claim* &le
 			// not exist, we either cons up a default or refuse the claim.
 		MyString schedd_requested_attr;
 
-        if (supports_consumption_policy(*mach_classad)) {
+        if (cp_supports_policy(*mach_classad)) {
             // apply consumption policy
             std::map<string, double> consumption;
-            compute_asset_consumption(*req_classad, *mach_classad, consumption);
+            cp_compute_consumption(*req_classad, *mach_classad, consumption);
 
             // generate the type string used by standard code path
             for (std::map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {

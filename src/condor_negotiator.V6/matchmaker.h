@@ -282,7 +282,7 @@ class Matchmaker : public Service
 			// trim out startd ads that are not in the Unclaimed state.
 		int trimStartdAds(ClassAdListDoesNotDeleteAds &startdAds);
 
-		bool SubmitterLimitPermits(ClassAd *candidate, double used, double allowed, double pieLeft);
+		bool SubmitterLimitPermits(ClassAd* request, ClassAd* candidate, double used, double allowed, double pieLeft);
 		double sumSlotWeights(ClassAdListDoesNotDeleteAds &startdAds,double *minSlotWeight, ExprTree* constraint);
 
 		/* ODBC insert functions */

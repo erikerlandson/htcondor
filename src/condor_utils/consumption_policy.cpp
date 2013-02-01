@@ -26,7 +26,7 @@
 #include "consumption_policy.h"
 
 
-bool supports_consumption_policy(ClassAd& resource) {
+bool cp_supports_policy(ClassAd& resource) {
     // currently, only p-slots can support a meaningful consumption policy
     bool part = false;
     if (!resource.LookupBool(ATTR_SLOT_PARTITIONABLE, part)) part = false;
@@ -51,7 +51,7 @@ bool supports_consumption_policy(ClassAd& resource) {
 }
 
 
-void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, double>& consumption) {
+void cp_compute_consumption(ClassAd& job, ClassAd& resource, map<string, double>& consumption) {
     consumption.clear();
 
     string mrv;
@@ -71,6 +71,9 @@ void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, doub
         double rv=0;
         if (job.EvalFloat(ra.c_str(), NULL, rv)) {
             // Allow _condor_RequestedXXX to override RequestedXXX
+            // this case is intended to be operative when a scheduler has set 
+            // such values and sent them on to the startd that owns this resource
+            // (e.g. I'd not expect this case to arise elsewhere, like the negotiator)
             formatstr(ra, "%s%s", ATTR_REQUEST_PREFIX, asset);
             if (!job.LookupString(ra.c_str(), rsave)) {
                 EXCEPT("Resource ad missing %s attribute", ra.c_str());
@@ -80,8 +83,13 @@ void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, doub
 
         // get the requested asset value
         formatstr(ra, "%s%s", ATTR_REQUEST_PREFIX, asset);
-        if (!job.EvalFloat(ra.c_str(), NULL, rv)) {
-            EXCEPT("Resource ad missing %s attribute", ra.c_str());
+        ClassAd::iterator f(job.find(ra));
+        if (f == resource.end()) {
+            // a RequestXxx attribute not present on job ad is OK - default it to zero
+            rv = 0;
+        } else if (!job.EvalFloat(ra.c_str(), NULL, rv)) {
+            // if RequestXxx attribute exists, I insist that it evaluates to a float
+            EXCEPT("Job ad attribute %s failed to evaluate\n", ra.c_str());
         }
         dprintf(D_ALWAYS, "EJE: requested(%s) = %g\n", asset, rv);
 
@@ -106,15 +114,20 @@ void compute_asset_consumption(ClassAd& job, ClassAd& resource, map<string, doub
 }
 
 
-bool consume_resource_assets(ClassAd& job, ClassAd& resource, bool test) {
+bool cp_sufficient_assets(ClassAd& job, ClassAd& resource) {
     map<string, double> consumption;
-    compute_asset_consumption(job, resource, consumption);
-    for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+    cp_compute_consumption(job, resource, consumption);
+    return cp_sufficient_assets(resource, consumption);
+}
+
+
+bool cp_sufficient_assets(ClassAd& resource, const map<string, double>& consumption) {
+    for (map<string, double>::const_iterator j(consumption.begin());  j != consumption.end();  ++j) {
         const char* asset = j->first.c_str();
         dprintf(D_ALWAYS, "EJE: asset %s...\n", asset);
         double av=0;
         if (!resource.LookupFloat(asset, av)) {
-            EXCEPT("Missing %s attribute", asset);
+            EXCEPT("Missing %s resource asset", asset);
         }
         dprintf(D_ALWAYS, "EJE: consumption(%s)= %g, available= %g\n", asset, j->second, av);
         if (av < j->second) {
@@ -122,16 +135,76 @@ bool consume_resource_assets(ClassAd& job, ClassAd& resource, bool test) {
             return false;
         }
     }
+    return true;
+}
 
-    // if we're in test mode, we skip actual consumption
-    if (test) return true;
 
-    // we can satisfy the requested assets, so do the deed:
+double cp_deduct_assets(ClassAd& job, ClassAd& resource, bool test) {
+    map<string, double> consumption;
+    cp_compute_consumption(job, resource, consumption);
+
+    // slot weight before asset deductions
+    double w0 = 0;
+    if (!resource.EvalFloat(ATTR_SLOT_WEIGHT, NULL, w0)) {
+        EXCEPT("Failed to evaluate %s", ATTR_SLOT_WEIGHT);
+    }
+
+    // deduct consumption from the resource assets
+    for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+        const char* asset = j->first.c_str();
+        double av=0;
+        if (!resource.LookupFloat(asset, av)) {
+            EXCEPT("Missing %s resource asset", asset);
+        }
+        resource.Assign(asset, av - j->second);
+    }
+
+    // slot weight after deductions
+    double w1 = 0;
+    if (!resource.EvalFloat(ATTR_SLOT_WEIGHT, NULL, w1)) {
+        EXCEPT("Failed to evaluate %s", ATTR_SLOT_WEIGHT);
+    }
+
+    // define cost as difference in slot weight before and after asset deduction
+    double cost = w0 - w1;
+
+    // if we are not in testing mode, then keep the asset deductions
+    if (!test) return cost;
+
+    // The Dude just wants his assets back
     for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
         const char* asset = j->first.c_str();
         double av=0;
         resource.LookupFloat(asset, av);
-        resource.Assign(asset, av - j->second);
+        resource.Assign(asset, av + j->second);
     }
-    return true;
+
+    return cost;
+}
+
+
+void cp_override_requested(ClassAd& job, ClassAd& resource, map<string, double>& consumption) {
+    cp_compute_consumption(job, resource, consumption);
+
+    for (map<string, double>::iterator j(consumption.begin());  j != consumption.end();  ++j) {
+        const char* asset = j->first.c_str();
+        string ra;
+        string oa;
+        formatstr(ra, "%s%s", ATTR_REQUEST_PREFIX, asset);
+        formatstr(oa, "_orig_%s%s", ATTR_REQUEST_PREFIX, asset);
+        job.CopyAttribute(oa.c_str(), ra.c_str());
+    }
+}
+
+
+void cp_restore_requested(ClassAd& job, const map<string, double>& consumption) {
+    for (map<string, double>::const_iterator j(consumption.begin());  j != consumption.end();  ++j) {
+        const char* asset = j->first.c_str();
+        string ra;
+        string oa;
+        formatstr(ra, "%s%s", ATTR_REQUEST_PREFIX, asset);
+        formatstr(oa, "_orig_%s%s", ATTR_REQUEST_PREFIX, asset);
+        job.CopyAttribute(ra.c_str(), oa.c_str());
+        job.Delete(oa);
+    }    
 }

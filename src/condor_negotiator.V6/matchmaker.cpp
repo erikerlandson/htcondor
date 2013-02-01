@@ -3508,28 +3508,6 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 											 pieLeft,
 											 only_consider_startd_rank);
 
-            // When we support neg-side multi-consumption, we need to consider
-            // insufficient resource assets as a failure mode.
-            // Do this prior to matchmaking protocol, since we are making a prediction
-            // here whether an attempted claim will succeed on the basis of available assets.
-            // An open question: would folding this logic into matchmakingAlgorithm()
-            // be a preferable semantic, so asset testing becomes another match test?
-            // Would have to properly handle requirements clauses of form 
-            // (RequestFoo <= Foo), interacting with ConsumptionFoo
-            if ((offer != NULL) && supports_consumption_policy(*offer)) {
-                // use test mode here, since other possible failure modes follow
-                if (!consume_resource_assets(request, *offer, true)) {
-                    dprintf(D_ALWAYS, "EJE: match failed due to insufficient resource assets\n");
-                    // future optimization: try to detect if no more matches are possible
-                    // (claim capacity measure becomes < 1?) and remove the ad for this cycle.
-                    // maybe provide a switch to always remove on 1st failure?
-                    startdAds.Remove(offer);
-                    startdAds.Insert(offer);
-                    // this case acts like failure to find match in rest of code path:
-                    offer = NULL;
-                }
-            }
-
 			if( !offer )
 			{
 				int want_match_diagnostics = 0;
@@ -3655,16 +3633,11 @@ negotiate(char const* groupName, char const *scheddName, const ClassAd *scheddAd
 		//		this negotiation cycle
 
         double match_cost = 0;
-        if (supports_consumption_policy(*offer)) {
-            double w0 = accountant.GetSlotWeight(offer);
+        if (cp_supports_policy(*offer)) {
             // we've vetted this match, so actually consume assets off the resource ad:
-            consume_resource_assets(request, *offer);
-            double w1 = accountant.GetSlotWeight(offer);
-            // prototype match cost is change in slot weight expr.  could be enhanced
-            // with a more formalized model like Claim Capcity model in the future.
-            match_cost = w0 - w1;
-            // in this mode we don't remove offers here, because we attempt to reuse them.
-            // removal is performed above when testing for resource assets
+            match_cost = cp_deduct_assets(request, *offer);
+            // in this mode we don't remove offers here, because the goal is to allow
+            // other jobs/requests to match against them and consume resources, if possible
         } else {
     		int reevaluate_ad = false;
     		offer->LookupBool(ATTR_WANT_AD_REVAULATE, reevaluate_ad);
@@ -3737,18 +3710,20 @@ EvalNegotiatorMatchRank(char const *expr_name,ExprTree *expr,
 }
 
 bool Matchmaker::
-SubmitterLimitPermits(ClassAd *candidate, double used, double allowed, double pieLeft) 
-{
-    // slots with a consumption policy have to disable this check to work properly
-    // alternatively, could compute accurate match cost with consume_resource_assets(),
-    // if/when I fold consumption policy into matchmakingAlgorithm().
-    if (supports_consumption_policy(*candidate)) return true;
+SubmitterLimitPermits(ClassAd* request, ClassAd* candidate, double used, double allowed, double pieLeft) {
+    double match_cost = 0;
 
-    double SlotWeight = accountant.GetSlotWeight(candidate);
-    if ((used + SlotWeight) <= allowed) {
+    if (cp_supports_policy(*candidate)) {
+        // deduct assets in test-mode only, for purpose of getting match cost
+        match_cost = cp_deduct_assets(*request, *candidate, true);
+    } else {
+        match_cost = accountant.GetSlotWeight(candidate);
+    }
+
+    if ((used + match_cost) <= allowed) {
         return true;
     }
-    if ((used <= 0) && (allowed > 0) && (pieLeft >= 0.99*SlotWeight)) {
+    if ((used <= 0) && (allowed > 0) && (pieLeft >= 0.99*match_cost)) {
 
 		// Allow user to round up once per pie spin in order to avoid
 		// "crumbs" being left behind that couldn't be taken by anyone
@@ -3872,9 +3847,9 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
             int t = 0;
             cached_bestSoFar->LookupInteger(ATTR_PREEMPT_STATE_, t);
             PreemptState pstate = PreemptState(t);
-			if ((pstate != NO_PREEMPTION) && SubmitterLimitPermits(cached_bestSoFar, limitUsed, submitterLimit, pieLeft)) {
+			if ((pstate != NO_PREEMPTION) && SubmitterLimitPermits(&request, cached_bestSoFar, limitUsed, submitterLimit, pieLeft)) {
 				break;
-			} else if (SubmitterLimitPermits(cached_bestSoFar, limitUsedUnclaimed, submitterLimitUnclaimed, pieLeft)) {
+			} else if (SubmitterLimitPermits(&request, cached_bestSoFar, limitUsedUnclaimed, submitterLimitUnclaimed, pieLeft)) {
 				break;
             }
 			MatchList->increment_rejForSubmitterLimit();
@@ -3941,8 +3916,27 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 			candidate->dPrint(D_MACHINE);
 		}
 
-			// the candidate offer and request must match
-		bool is_a_match = IsAMatch(&request, candidate);
+        map<string, double> consumption;
+        bool has_cp = cp_supports_policy(*candidate);
+        bool cp_sufficient = true;
+        if (has_cp) {
+            // replace RequestXxx attributes (temporarily) with values derived from
+            // the consumption policy, so that Requirements expressions evaluate in a
+            // manner consistent with the check on CP resources 
+            cp_override_requested(request, *candidate, consumption);
+            cp_sufficient = cp_sufficient_assets(*candidate, consumption);
+        }
+
+		// The candidate offer and request must match.
+        // When candidate supports a consumption policy, then resources
+        // requested via consumption policy must also be available from
+        // the resource
+		bool is_a_match = cp_sufficient && IsAMatch(&request, candidate);
+
+        if (has_cp) {
+            // put original values back for RequestXxx attributes
+            cp_restore_requested(request, consumption);
+        }
 
 		int cluster_id=-1,proc_id=-1;
 		MyString machine_name;
@@ -4067,10 +4061,10 @@ matchmakingAlgorithm(const char *scheddName, const char *scheddAddr, ClassAd &re
 		   check if we are negotiating only for startd rank, since startd rank
 		   preemptions should be allowed regardless of user priorities. 
 	    */
-        if ((candidatePreemptState == PRIO_PREEMPTION) && !SubmitterLimitPermits(candidate, limitUsed, submitterLimit, pieLeft)) {
+        if ((candidatePreemptState == PRIO_PREEMPTION) && !SubmitterLimitPermits(&request, candidate, limitUsed, submitterLimit, pieLeft)) {
             rejForSubmitterLimit++;
             continue;
-        } else if ((candidatePreemptState == NO_PREEMPTION) && !SubmitterLimitPermits(candidate, limitUsedUnclaimed, submitterLimitUnclaimed, pieLeft)) {
+        } else if ((candidatePreemptState == NO_PREEMPTION) && !SubmitterLimitPermits(&request, candidate, limitUsedUnclaimed, submitterLimitUnclaimed, pieLeft)) {
             rejForSubmitterLimit++;
             continue;
         }
