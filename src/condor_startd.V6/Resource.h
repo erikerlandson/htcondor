@@ -245,6 +245,8 @@ public:
 	Claim*			r_cur;		// Info about the current claim
 	Claim*			r_pre;		// Info about the possibly preempting claim
 	Claim*			r_pre_pre;	// Info about the preempting preempting claim
+
+    // store multiple claims (currently > 1 for consumption policies)
     struct claimset_less {
         bool operator()(Claim* a, Claim* b) const {
             return strcmp(a->id(), b->id()) < 0;
@@ -252,6 +254,11 @@ public:
     };
     typedef std::set<Claim*, claimset_less> claims_t;
     claims_t        r_claims;
+
+    // Consumption policy configuration (empty if none)
+    typedef std::map<string, string> cp_map_t;
+    cp_map_t cp_map;
+    
 	CODMgr*			r_cod_mgr;	// Object to manage COD claims
 	Reqexp*			r_reqexp;   // Object for the requirements expression
 	CpuAttributes*	r_attr;		// Attributes of this resource
