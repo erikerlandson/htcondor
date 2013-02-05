@@ -93,80 +93,32 @@ Resource::Resource( CpuAttributes* cap, int rid, bool multiple_slots, Resource* 
 	r_cod_mgr = new CODMgr( this );
 	r_reqexp = new Reqexp( this );
 	r_load_queue = new LoadQueue( 60 );
+    r_has_cp = false;
 
     if (get_feature() != PARTITIONABLE_SLOT) {
         // non partitionable slots get legacy claim logic
         r_cur = new Claim(this);
     } else {
         // Partitionable slots may support a consumption policy
-
         // first, determine if a consumption policy is being configured
         string pname;
         formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_POLICY", type());
-        bool has_cp = false;
         if (param_defined(pname.c_str())) {
-            has_cp = param_boolean(pname.c_str(), false);
+            r_has_cp = param_boolean(pname.c_str(), false);
         } else {
-            has_cp = param_boolean("CONSUMPTION_POLICY", false);
+            r_has_cp = param_boolean("CONSUMPTION_POLICY", false);
         }
 
         // number of claims to be supplied by the pslot
         formatstr(pname, "SLOT_TYPE_%d_NUM_CLAIMS", type());
         unsigned nclaims = 1;
         if (param_defined(pname.c_str())) {
-            nclaims = param_integer(pname.c_str(), has_cp ? r_attr->num_cpus() : 1);
+            nclaims = param_integer(pname.c_str(), r_has_cp ? r_attr->num_cpus() : 1);
         } else {
-            nclaims = param_integer("NUM_CLAIMS", has_cp ? r_attr->num_cpus() : 1);
+            nclaims = param_integer("NUM_CLAIMS", r_has_cp ? r_attr->num_cpus() : 1);
         }
         while (r_claims.size() < nclaims) r_claims.insert(new Claim(this));
         r_cur = *(r_claims.begin());
-
-        // If we do have a consumption policy, then we acquire config for it
-        if (has_cp) {
-            // cpus, memory and disk can take defaults from MODIFY_REQUEST_EXPR_REQUEST***
-            string expr;
-            formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_CPUS", type());
-            if (param_defined(pname.c_str())) {
-                param(expr, pname.c_str());
-            } else {
-                param(expr, "CONSUMPTION_CPUS");
-            }
-            cp_map[ATTR_CPUS] = expr;
-
-            formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_MEMORY", type());
-            if (param_defined(pname.c_str())) {
-                param(expr, pname.c_str());
-            } else {
-                param(expr, "CONSUMPTION_MEMORY");
-            }
-            cp_map[ATTR_MEMORY] = expr;
-
-            formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_DISK", type());
-            if (param_defined(pname.c_str())) {
-                param(expr, pname.c_str());
-            } else {
-                param(expr, "CONSUMPTION_DISK");
-            }
-            cp_map[ATTR_DISK] = expr;
-
-            // extensible resources:
-            for (CpuAttributes::slotres_map_t::const_iterator j(r_attr->get_slotres_map().begin());  j != r_attr->get_slotres_map().end();  ++j) {
-                string rname(j->first);
-                *(rname.begin()) = toupper(*(rname.begin()));
-                string cpdefault;
-                formatstr(cpdefault, "quantize(target.%s%s, {0, 1})", ATTR_REQUEST_PREFIX, rname.c_str());
-
-                formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_%s", type(), rname.c_str());
-                if (param_defined(pname.c_str())) {
-                    param(expr, pname.c_str());
-                } else {
-                    formatstr(pname, "CONSUMPTION_%s", rname.c_str());
-                    param(expr, cname.c_str(), cpdefault.c_str());
-                }
-                dprintf(D_ALWAYS, "EJE: rname=%s  pname=%s  cpdefault=%s  expr=%s\n", rname.c_str(), pname.c_str(), cpdefault.c_str(), expr.c_str());
-                cp_map[rname] = expr;
-            }
-        }
     }
 
 	if( Name ) {
@@ -2043,6 +1995,60 @@ Resource::publish( ClassAd* cap, amask_t mask )
 	if( IS_PUBLIC(mask) && IS_SHARED_SLOT(mask) ) {
 		resmgr->publishSlotAttrs( cap );
 	}
+
+    if (IS_PUBLIC(mask)) {
+        dprintf(D_ALWAYS, "EJE: setting slot weight...\n");
+        string pname;
+        string expr;
+        formatstr(pname, "SLOT_TYPE_%d_SLOT_WEIGHT", type());
+        if (param_defined(pname.c_str())) {
+            param(expr, pname.c_str());
+        } else if (param_defined("SLOT_WEIGHT")) {
+            param(expr, "SLOT_WEIGHT");
+        } else {
+            param(expr, "SlotWeight", "Cpus");
+        }
+        if (!cap->AssignExpr(ATTR_SLOT_WEIGHT, expr.c_str())) {
+            EXCEPT("Bad slot weight expression: '%s'", expr.c_str());
+        }
+
+        if (r_has_cp) {
+            dprintf(D_ALWAYS, "EJE: has cp....\n");
+            // If we have a consumption policy, then we acquire config for it
+            // cpus, memory and disk always exist, and have asset-specific defaults:
+            string mrv;
+            if (!cap->LookupString(ATTR_MACHINE_RESOURCES, mrv)) {
+                EXCEPT("Resource ad missing %s attribute", ATTR_MACHINE_RESOURCES);
+            }
+
+            StringList alist(mrv.c_str());
+            alist.rewind();
+            while (char* asset = alist.next()) {
+                dprintf(D_ALWAYS, "EJE: asset= %s\n", asset);
+                string rname(asset);
+                if (rname == "swap") continue;
+
+                *(rname.begin()) = toupper(*(rname.begin()));
+                formatstr(pname, "SLOT_TYPE_%d_CONSUMPTION_%s", type(), rname.c_str());
+                if (param_defined(pname.c_str())) {
+                    param(expr, pname.c_str());
+                } else {
+                    string cpdefault;
+                    formatstr(cpdefault, "quantize(target.%s%s, {0, 1})", ATTR_REQUEST_PREFIX, rname.c_str());
+                    // cpus, memory and disk will pick up default values from param_info:
+                    formatstr(pname, "CONSUMPTION_%s", rname.c_str());
+                    param(expr, pname.c_str(), cpdefault.c_str());
+                }
+                dprintf(D_ALWAYS, "EJE: rname=%s  pname=%s  expr=%s\n", rname.c_str(), pname.c_str(), expr.c_str());
+
+                string rattr;
+                formatstr(rattr, "Consumption%s", rname.c_str());
+                if (!cap->AssignExpr(rattr.c_str(), expr.c_str())) {
+                    EXCEPT("Bad consumption policy expression: '%s'", expr.c_str());
+                }
+            }
+        }
+    }
 
 #if !defined(WANT_OLD_CLASSADS)
 	cap->AddTargetRefs( TargetJobAttrs, false );

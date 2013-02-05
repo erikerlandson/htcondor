@@ -254,11 +254,8 @@ public:
     };
     typedef std::set<Claim*, claimset_less> claims_t;
     claims_t        r_claims;
+    bool            r_has_cp;
 
-    // Consumption policy configuration (empty if none)
-    typedef std::map<string, string> cp_map_t;
-    cp_map_t cp_map;
-    
 	CODMgr*			r_cod_mgr;	// Object to manage COD claims
 	Reqexp*			r_reqexp;   // Object for the requirements expression
 	CpuAttributes*	r_attr;		// Attributes of this resource
